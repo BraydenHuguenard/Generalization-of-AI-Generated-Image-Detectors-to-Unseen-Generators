@@ -29,3 +29,8 @@ python scripts/plot_training.py   results/holdout_5     # loss + val metric curv
 python scripts/plot_generators.py results/holdout_5     # per-generator bars, ROC, confusion matrices
 python scripts/plot_compare.py results/holdout_1 results/holdout_3 results/holdout_5   # gap across runs
 ```
+
+## Google Colab
+Open https://colab.research.google.com/github/BraydenHuguenard/Generalization-of-AI-Generated-Image-Detectors-to-Unseen-Generators/blob/main/colab.ipynb,
+set Runtime → Change runtime type → T4 GPU, and run the cells in order. Results are saved to `MyDrive/dl_results/` in Google Drive.
+Colab only sees what's pushed to GitHub, so push local changes first.

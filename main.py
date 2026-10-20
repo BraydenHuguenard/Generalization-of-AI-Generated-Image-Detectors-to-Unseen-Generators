@@ -51,20 +51,28 @@ def get_device():
     return torch.device("cpu")
 
 
-def make_loader(ds, tfm, args, shuffle):
-    def apply(batch):
-        batch["x"] = [tfm(im.convert("RGB")) for im in batch["Image"]]
+# Transform and collate live at module level so DataLoader workers can pickle them
+# (macOS starts workers with "spawn", which can't pickle nested functions).
+class ApplyTransform:
+    def __init__(self, tfm):
+        self.tfm = tfm
+
+    def __call__(self, batch):
+        batch["x"] = [self.tfm(im.convert("RGB")) for im in batch["Image"]]
         return batch
 
-    ds = ds.with_transform(apply)
 
-    def collate(items):
-        return (torch.stack([i["x"] for i in items]),
-                torch.tensor([i["Label_A"] for i in items], dtype=torch.float32),
-                torch.tensor([i["Label_B"] for i in items]))
+def collate(items):
+    return (torch.stack([i["x"] for i in items]),
+            torch.tensor([i["Label_A"] for i in items], dtype=torch.float32),
+            torch.tensor([i["Label_B"] for i in items]))
 
+
+def make_loader(ds, tfm, args, shuffle):
+    ds = ds.with_transform(ApplyTransform(tfm))
     return DataLoader(ds, batch_size=args.batch_size, shuffle=shuffle,
-                      num_workers=args.workers, collate_fn=collate)
+                      num_workers=args.workers, collate_fn=collate,
+                      persistent_workers=args.workers > 0)
 
 
 def subsample(ds, n, seed):
@@ -123,11 +131,13 @@ def main():
 
     ds = load_dataset("Rajarshi-Roy-research/Defactify_Image_Dataset")
 
-    train = ds["train"].filter(lambda b: [g not in args.holdout for g in b["Label_B"]],
-                               batched=True, input_columns=["Label_B"])
+    # with input_columns, the filter fn receives the Label_B column (list of ints) directly
+    def is_seen(gens):
+        return [g not in args.holdout for g in gens]
+
+    train = ds["train"].filter(is_seen, batched=True, input_columns=["Label_B"])
     train = subsample(train, args.max_train, args.seed)
-    val = subsample(ds["validation"].filter(lambda b: [g not in args.holdout for g in b["Label_B"]],
-                                            batched=True, input_columns=["Label_B"]),
+    val = subsample(ds["validation"].filter(is_seen, batched=True, input_columns=["Label_B"]),
                     args.max_eval, args.seed)  # val = seen generators only (no peeking at unseen)
     test = subsample(ds["test"], args.max_eval, args.seed)  # all generators
     print(f"train={len(train)} val={len(val)} test={len(test)}")
