@@ -86,7 +86,9 @@ def predict(model, loader, device):
     model.eval()
     probs, labels, gens = [], [], []
     for x, y, g in loader:
-        probs.append(torch.sigmoid(model(x.to(device)).squeeze(1)).cpu())
+        with torch.autocast(device.type, enabled=device.type == "cuda"):
+            logits = model(x.to(device)).squeeze(1)
+        probs.append(torch.sigmoid(logits.float()).cpu())
         labels.append(y)
         gens.append(g)
     return torch.cat(probs).numpy(), torch.cat(labels).numpy(), torch.cat(gens).numpy()
@@ -162,6 +164,9 @@ def main():
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    # mixed precision on CUDA (~2x faster on a T4); no-op elsewhere
+    use_amp = device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
     history, best_auc = [], -1.0
     for epoch in range(1, args.epochs + 1):
@@ -170,9 +175,11 @@ def main():
         for i, (x, y, _) in enumerate(train_dl):
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
-            loss = criterion(model(x).squeeze(1), y)
-            loss.backward()
-            optimizer.step()
+            with torch.autocast(device.type, enabled=use_amp):
+                loss = criterion(model(x).squeeze(1).float(), y)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             total += loss.item() * len(y); n += len(y)
             if i % 50 == 0:
                 print(f"  epoch {epoch} step {i}/{len(train_dl)} loss {loss.item():.4f}", flush=True)
